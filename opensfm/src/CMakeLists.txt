@@ -13,7 +13,14 @@ set(CMAKE_MODULE_PATH ${opensfm_SOURCE_DIR}/cmake)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC -std=c++0x")
 
+LIST(APPEND CMAKE_LIBRARY_PATH /usr/lib64/)
+LIST(APPEND CMAKE_LIBRARY_PATH /usr/lib64/atlas)
 
+set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH} /home/shaoshanl/dep_libs")
+set(EIGEN_INCLUDE_DIR_HINTS /home/shaoshanl/dep_libs/eigen/include/eigen3)
+set(SUITESPARSE_INCLUDE_DIR_HINTS /usr/include/suitesparse) 
+set(SUITESPARSE_LIBRARY_DIR_HINTS /usr/lib64)
+ 
 # Find dependencies.
 find_package(OpenMP)
 if (OPENMP_FOUND)
@@ -21,6 +28,8 @@ if (OPENMP_FOUND)
   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
 endif()
 
+set(BLAS_DIR /usr/lib64/atlas)
+set(LAPACK_DIR /usr/lib64)
 find_package(LAPACK)
 if (LAPACK_FOUND)
   include_directories(${LAPACK_INCLUDE_DIRS})
@@ -84,6 +93,7 @@ endif ()
 add_definitions(-DVL_DISABLE_AVX)
 add_library(vl ${VLFEAT_SRCS})
 
+message(STATUS "ceres: ${CERES_LIBRARIES}" )
 
 # Python wrapper
 add_library(csfm SHARED csfm.cc)
