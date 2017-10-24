@@ -830,6 +830,20 @@ class BundleAdjuster {
     compute_reprojection_errors_ = v;
   }
 
+  double GetComputeReprojectionErrors() {
+    ComputeReprojectionErrors();
+
+    double avg_rep_error = 0.0;
+    for (int i = 0; i < observations_.size(); ++i) {
+      avg_rep_error += observations_[i].point->reprojection_error;
+    }    
+    avg_rep_error /= observations_.size();
+
+    std::cout << "reprojection_error: " << avg_rep_error << std::endl;
+
+    return avg_rep_error;
+  }  
+  
   void Run() {
     ceres::LossFunction *loss;
     if (loss_function_.compare("TruncatedLoss") == 0) {

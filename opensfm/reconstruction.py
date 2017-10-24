@@ -20,7 +20,8 @@ from opensfm import types
 
 
 logger = logging.getLogger(__name__)
-
+reprojection_count = 0
+avg_reprojection_error = 0.0
 
 def bundle(graph, reconstruction, gcp, config):
     """Bundle adjust a reconstruction."""
@@ -122,8 +123,16 @@ def bundle(graph, reconstruction, gcp, config):
 
     logger.debug('Bundle setup/run/teardown {0}/{1}/{2}'.format(
         setup - start, run - setup, teardown - run))
+    
+    global avg_reprojection_error
+    avg_reprojection_error += ba.get_compute_reprojection_errors()
 
+    global reprojection_count
+    reprojection_count += 1
 
+def get_avg_reprojection_error():
+    return avg_reprojection_error / reprojection_count   
+    
 def bundle_single_view(graph, reconstruction, shot_id, config):
     """Bundle adjust a single camera."""
     ba = csfm.BundleAdjuster()

@@ -20,4 +20,4 @@ class Command:
         reconstruction.incremental_reconstruction(data)
         end = time.time()
         with open(data.profile_log(), 'a') as fout:
-            fout.write('reconstruct: {0}\n'.format(end - start))
+            fout.write('reconstruct: {0}, error: {1}\n'.format(end - start, reconstruction.get_avg_reprojection_error()))

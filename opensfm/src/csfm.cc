@@ -109,6 +109,7 @@ BOOST_PYTHON_MODULE(csfm) {
     .def("set_compute_covariances", &BundleAdjuster::SetComputeCovariances)
     .def("get_covariance_estimation_valid", &BundleAdjuster::GetCovarianceEstimationValid)
     .def("set_compute_reprojection_errors", &BundleAdjuster::SetComputeReprojectionErrors)
+    .def("get_compute_reprojection_errors", &BundleAdjuster::GetComputeReprojectionErrors)
     .def("brief_report", &BundleAdjuster::BriefReport)
     .def("full_report", &BundleAdjuster::FullReport)
   ;
