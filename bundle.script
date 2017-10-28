@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+
+#SBATCH --partition=phis
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=64
+# #SBATCH --mem=60G
+
+# load modulefiles
+module use /home/shaoshanl/modulefiles/
+module load eigen3.3.4 ceres-solver1.13 opencv3.3 opengv sys gflags2.2.1
+
+source env/bin/activate
+
+# run bundle reconstruction
+srun -c 64 python bin/opensfm reconstruct $1
+
+# unload modules
+# module unload eigen3.3.4 ceres-solver1.13 opencv3.3 opengv sys gflags2.2.1
+# module unuse /home/shaoshanl/modulefiles/
