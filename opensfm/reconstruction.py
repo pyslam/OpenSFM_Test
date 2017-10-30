@@ -368,6 +368,8 @@ def _pair_reconstructability_arguments(track_dict, config):
 def _compute_pair_reconstructability(args):
     log.setup()
     threshold, im1, im2, p1, p2 = args
+    logger.info("compute pair between {} and {}".format(im1, im2))
+
     H, inliers = cv2.findHomography(p1, p2, cv2.RANSAC, threshold)
     r = pairwise_reconstructability(len(p1), inliers.sum())
     return (im1, im2, r)
@@ -913,14 +915,23 @@ def incremental_reconstruction(data):
         data.invent_reference_lla()
 
     graph = data.load_tracks_graph()
+    logger.info("load_graph finished.")
+
     tracks, images = matching.tracks_and_images(graph)
+    logger.info("load_tracks finished.")
+
     remaining_images = set(images)
     gcp = None
     if data.ground_control_points_exist():
         gcp = data.load_ground_control_points()
     common_tracks = matching.all_common_tracks(graph, tracks)
+    logger.info("cal common tracks finished.")
+
     reconstructions = []
     pairs = compute_image_pairs(common_tracks, data.config)
+    logger.info("compute image pairs finished.")
+
+    start = time.time()
     for im1, im2 in pairs:
         if im1 in remaining_images and im2 in remaining_images:
             tracks, p1, p2 = common_tracks[im1, im2]
@@ -935,8 +946,9 @@ def incremental_reconstruction(data):
                                          key=lambda x: -len(x.shots))
                 data.save_reconstruction(reconstructions)
 
+    end = time.time()
     for k, r in enumerate(reconstructions):
         logger.info("Reconstruction {}: {} images, {} points".format(
             k, len(r.shots), len(r.points)))
-    logger.info("{} partial reconstructions in total.".format(
-        len(reconstructions)))
+    logger.info("{} partial reconstructions in total {}s.".format(
+        len(reconstructions), end-start))
