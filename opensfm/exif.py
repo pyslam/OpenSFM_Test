@@ -25,19 +25,13 @@ def gps_to_decimal(values, reference):
     return sign * (degrees + minutes / 60 + seconds / 3600)
 
 
-def get_float_tag(tags, key):
+def get_tag_as_float(tags, key):
     if key in tags:
-        return float(tags[key].values[0])
-    else:
-        return None
-
-
-def get_frac_tag(tags, key):
-    if key in tags:
-        try:
-            return eval_frac(tags[key].values[0])
-        except ZeroDivisionError:
-            return None
+        val = tags[key].values[0]
+        if isinstance(val, exifread.utils.Ratio):
+            return eval_frac(val)
+        else:
+            return float(val)
     else:
         return None
 
@@ -168,9 +162,9 @@ class EXIF:
     def extract_focal(self):
         make, model = self.extract_make(), self.extract_model()
         focal_35, focal_ratio = compute_focal(
-            get_float_tag(self.tags, 'EXIF FocalLengthIn35mmFilm'),
-            get_frac_tag(self.tags, 'EXIF FocalLength'),
-            get_frac_tag(self.tags, 'EXIF CCD width'),
+            get_tag_as_float(self.tags, 'EXIF FocalLengthIn35mmFilm'),
+            get_tag_as_float(self.tags, 'EXIF FocalLength'),
+            get_tag_as_float(self.tags, 'EXIF CCD width'),
             sensor_string(make, model))
         return focal_35, focal_ratio
 
