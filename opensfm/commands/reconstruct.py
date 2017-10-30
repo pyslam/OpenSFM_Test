@@ -20,4 +20,6 @@ class Command:
         reconstruction.incremental_reconstruction(data)
         end = time.time()
         with open(data.profile_log(), 'a') as fout:
-            fout.write('reconstruct: {0}, error: {1}\n'.format(end - start, reconstruction.get_avg_reprojection_error()))
+            fout.write('reconstruct: {0}, error: {1}, bundle time: {2}\n'.format(end - start, \
+                reconstruction.get_avg_reprojection_error(), \
+                reconstruction.get_total_bundle_time()))

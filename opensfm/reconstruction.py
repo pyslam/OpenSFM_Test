@@ -23,6 +23,7 @@ from opensfm.context import parallel_map
 logger = logging.getLogger(__name__)
 reprojection_count = 0
 avg_reprojection_error = 0.0
+total_bundle_time = 0.0
 
 def bundle(graph, reconstruction, gcp, config):
     """Bundle adjust a reconstruction."""
@@ -131,9 +132,15 @@ def bundle(graph, reconstruction, gcp, config):
     global reprojection_count
     reprojection_count += 1
 
+    global total_bundle_time
+    total_bundle_time += (teardown - start)
+
 def get_avg_reprojection_error():
     return avg_reprojection_error / reprojection_count   
-    
+
+def get_total_bundle_time():
+    return total_bundle_time
+        
 def bundle_single_view(graph, reconstruction, shot_id, config):
     """Bundle adjust a single camera."""
     ba = csfm.BundleAdjuster()
