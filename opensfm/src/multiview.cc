@@ -122,9 +122,8 @@ bp::object TriangulateBearingsDLT(const bp::list &Rts_list,
     }
   }
 
-  npy_intp Xe_shape[1] = {3};
   return TriangulateReturn(TRIANGULATION_OK,
-      bpn_array_from_data(1, Xe_shape, X.data()));
+                           bpn_array_from_data(X.data(), 3));
 }
 
 
@@ -137,7 +136,7 @@ Eigen::Vector3d TriangulateBearingsMidpointSolve(
     const Eigen::Matrix<double, 3, Eigen::Dynamic> &os,
     const Eigen::Matrix<double, 3, Eigen::Dynamic> &bs) {
   int nviews = bs.cols();
-  assert(nviews == os.size());
+  assert(nviews == os.cols());
   assert(nviews >= 2);
 
   Eigen::Matrix3d BBt;
@@ -207,9 +206,8 @@ bp::object TriangulateBearingsMidpoint(const bp::list &os_list,
     }
   }
 
-  npy_intp Xe_shape[1] = {3};
   return TriangulateReturn(TRIANGULATION_OK,
-                           bpn_array_from_data(1, Xe_shape, X.data()));
+                           bpn_array_from_data(X.data(), 3));
 }
 
 

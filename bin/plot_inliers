@@ -175,9 +175,9 @@ def display_figure(figure, save_figs, data=None, file_name='',
                            hspace=hspace)
 
     if save_figs:
-        p = data.data_path + '/plot_inliers'
+        p = os.path.join(args.dataset, 'plot_inliers')
         io.mkdir_p(p)
-        figure.savefig(p + '/' + file_name, dpi=100)
+        figure.savefig(os.path.join(p, file_name), dpi=100)
         pl.close()
     else:
         pl.show()
@@ -240,10 +240,11 @@ def triangulate_tracks(tracks, reconstruction, graph, min_ray_angle):
     :return: An array of booleans determining if each track was successfully triangulated or not.
     """
     succeeded = []
+    triangulator = reconstruct.TrackTriangulator(graph, reconstruction)
 
     for track in tracks:
         # Triangulate with 1 as reprojection threshold to avoid excluding tracks because of error.
-        reconstruct.triangulate_track(str(track), graph, reconstruction, {}, 1, min_ray_angle)
+        triangulator.triangulate(str(track), 1, min_ray_angle)
         succeeded.append(True) if str(track) in reconstruction.points else succeeded.append(False)
 
     return np.array(succeeded) if len(succeeded) else np.empty((0,), bool)
@@ -404,8 +405,8 @@ def create_matches_figure(im1, im2, data, save_figs=False, single_column=False):
     fig, rows, cols = \
         create_four_figure('Matches ({0}): {1} - {2}'.format(data.feature_type().upper(), im1, im2), single_column)
 
-    im1_array = data.image_as_array(im1)
-    im2_array = data.image_as_array(im2)
+    im1_array = data.load_image(im1)
+    im2_array = data.load_image(im2)
 
     # Calculate symmetric matches.
     p1, f1, c1 = data.load_features(im1)
@@ -417,7 +418,7 @@ def create_matches_figure(im1, im2, data, save_figs=False, single_column=False):
     symmetric_matches = matching.match_symmetric(f1, i1, f2, i2, data.config)
 
     if symmetric_matches.shape[0] < 8:
-        print 'Not enough matches for eight point algorithm: ' + str(symmetric_matches.shape[0])
+        print('Not enough matches for eight point algorithm: ' + str(symmetric_matches.shape[0]))
         return
 
     # Plot features
@@ -583,7 +584,8 @@ def plot_bootstrapped_reconstruction(fw, ip, index, p1, p2, robust_tracks, linke
     """
 
     print_reset = redirect_print()
-    reconstruction = reconstruct.bootstrap_reconstruction(data, graph, ip.im1, ip.im2)
+    _, pm1, pm2 = matching.common_tracks(graph, ip.im1, ip.im2)
+    reconstruction, _ = reconstruct.bootstrap_reconstruction(data, graph, ip.im1, ip.im2, pm1, pm2)
     reset_print(print_reset)
 
     threshold, pixels1, pixels2 = thresholds(ip.im1_array, ip.im2_array, 'triangulation_threshold', 0.004, data)
@@ -609,7 +611,7 @@ def plot_bootstrapped_reconstruction(fw, ip, index, p1, p2, robust_tracks, linke
                 non_robust_rec_tracks.shape[0],
                 failed_rec_tracks.shape[0]) + \
             'Triangulation threshold: {0:.2g} ({1:.1f} - {2:.1f} pixels). Min ray angle: {3}.'.format(
-                threshold, pixels1, pixels2, data.config.get('triangulation_min_ray_angle', 2.0))
+                threshold, pixels1, pixels2, data.config['triangulation_min_ray_angle'])
 
         rec_plot = plot_matches_sub(fw.figure, fw.rows, fw.cols, index, rec_title, ip.im1_array, ip.im2_array,
                                     robust_rec_points1, robust_rec_points2, 'c', 'ob')
@@ -618,8 +620,8 @@ def plot_bootstrapped_reconstruction(fw, ip, index, p1, p2, robust_tracks, linke
     else:
         failed_title = \
             'Bootstrap failed. Less than {0} points. Triangulation threshold: {1:.2g} ({2:.1f} - {3:.1f} pixels).'\
-            .format(data.config.get('five_point_algo_min_inliers', 50), threshold, pixels1, pixels2) +\
-            'Min ray angle: {0}.'.format(data.config.get('triangulation_min_ray_angle', 2.0))
+            .format(data.config['five_point_algo_min_inliers'], threshold, pixels1, pixels2) +\
+            'Min ray angle: {0}.'.format(data.config['triangulation_min_ray_angle'])
         create_subplot(fw.figure, fw.rows, fw.cols, index, failed_title, (0, 100), (0, 100))
 
 
@@ -638,7 +640,7 @@ def create_tracks_figure(im1, im2, data, save_figs=False, single_column=False):
         create_four_figure('Tracks ({0}): {1} - {2}'.format(data.feature_type().upper(), im1, im2), single_column)
 
     fw = FigureWrapper(fig, rows, cols)
-    ip = ImagePair(im1, im2, data.image_as_array(im1), data.image_as_array(im2))
+    ip = ImagePair(im1, im2, data.load_image(im1), data.load_image(im2))
 
     p1 = load_points(im1, data)
     p2 = load_points(im2, data)
@@ -653,7 +655,7 @@ def create_tracks_figure(im1, im2, data, save_figs=False, single_column=False):
     track_points2 = p2[tracks[:, 2]]
 
     if tracks.shape[0] < 5:
-        print 'Not enough tracks for five point algorithm: ' + str(tracks.shape[0])
+        print('Not enough tracks for five point algorithm: ' + str(tracks.shape[0]))
         return
 
     robust_tracks, linked_tracks = matches(tracks, robust_matches, lambda a: a[1:])
@@ -720,7 +722,7 @@ def plot_reprojected_tracks(fw, ip, index, p1, p2, tracks, rec_tracks, non_rec_t
     rp1 = reproject_tracks(ip.im1, rec_tracks[:, 0], reconstruction)
     rp2 = reproject_tracks(ip.im2, rec_tracks[:, 0], reconstruction)
 
-    min_ray_angle = data.config.get('triangulation_min_ray_angle', 2.0)
+    min_ray_angle = data.config['triangulation_min_ray_angle']
     succeeded = triangulate_tracks(non_rec_tracks[:, 0], reconstruction, graph, min_ray_angle)
     reprojected1 = reproject_tracks(ip.im1, non_rec_tracks[succeeded, 0], reconstruction)
     reprojected2 = reproject_tracks(ip.im2, non_rec_tracks[succeeded, 0], reconstruction)
@@ -762,7 +764,7 @@ def create_reconstruction_matches_figure(im1, im2, data, save_figs=False):
                  fontsize=18, fontweight='bold')
 
     fw = FigureWrapper(fig, 2, 1)
-    ip = ImagePair(im1, im2, data.image_as_array(im1), data.image_as_array(im2))
+    ip = ImagePair(im1, im2, data.load_image(im1), data.load_image(im2))
 
     p1 = load_points(im1, data)
     p2 = load_points(im2, data)
@@ -770,12 +772,12 @@ def create_reconstruction_matches_figure(im1, im2, data, save_figs=False):
     graph = data.load_tracks_graph()
     tracks = load_common_tracks(im1, im2, graph)
     if tracks.shape[0] < 1:
-        print 'No tracks to plot.'
+        print('No tracks to plot.')
         return
 
     reconstruction = find_reconstruction([im1, im2], data)
     if reconstruction is None:
-        print '{0} and {1} does not exist in a common reconstruction.'.format(im1, im2)
+        print('{0} and {1} does not exist in a common reconstruction.'.format(im1, im2))
 
     rec_tracks, non_rec_tracks = reconstruction_tracks(tracks, reconstruction)
 
@@ -801,16 +803,16 @@ def create_complete_reconstruction_figure(im, data, save_figs=False, single_colu
 
     reconstruction = find_reconstruction([im], data)
     if reconstruction is None:
-        print '{0} does not exist in a reconstruction.'.format(im)
+        print('{0} does not exist in a reconstruction.'.format(im))
         return
 
-    im_array = data.image_as_array(im)
+    im_array = data.load_image(im)
     p = load_points(im, data)
 
     graph = data.load_tracks_graph()
     tracks = load_tracks(im, graph)
     if tracks.shape[0] < 1:
-        print 'No tracks for exist for {0}.'.format(im)
+        print('No tracks for exist for {0}.'.format(im))
         return
 
     rec_tracks, non_rec_tracks = reconstruction_tracks(tracks, reconstruction)
@@ -826,7 +828,7 @@ def create_complete_reconstruction_figure(im, data, save_figs=False, single_colu
     plot_points(rec_plot, im_array, rec_track_points, 'ob')
     plot_points(rec_plot, im_array, rp, '+w')
 
-    min_ray_angle = data.config.get('triangulation_min_ray_angle', 2.0)
+    min_ray_angle = data.config['triangulation_min_ray_angle']
     succeeded = triangulate_tracks(non_rec_tracks[:, 0], reconstruction, graph, min_ray_angle)
     reprojected = reproject_tracks(im, non_rec_tracks[succeeded, 0], reconstruction)
 
@@ -863,16 +865,16 @@ def create_reprojection_error_figure(im, data, save_figs=False, single_column=Fa
 
     reconstruction = find_reconstruction([im], data)
     if reconstruction is None:
-        print '{0} does not exist in a reconstruction.'.format(im)
+        print('{0} does not exist in a reconstruction.'.format(im))
         return
 
-    im_array = data.image_as_array(im)
+    im_array = data.load_image(im)
     p = load_points(im, data)
 
     graph = data.load_tracks_graph()
     tracks = load_tracks(im, graph)
     if tracks.shape[0] < 1:
-        print 'No tracks for exist for {0}.'.format(im)
+        print('No tracks for exist for {0}.'.format(im))
         return
 
     rec_tracks, non_rec_tracks = reconstruction_tracks(tracks, reconstruction)
@@ -880,7 +882,7 @@ def create_reprojection_error_figure(im, data, save_figs=False, single_column=Fa
 
     reproj_rec = reproject_tracks(im, rec_tracks[:, 0], reconstruction)
 
-    min_ray_angle = data.config.get('triangulation_min_ray_angle', 2.0)
+    min_ray_angle = data.config['triangulation_min_ray_angle']
     succeeded = triangulate_tracks(non_rec_tracks[:, 0], reconstruction, graph, min_ray_angle)
     reproj_non = reproject_tracks(im, non_rec_tracks[succeeded, 0], reconstruction)
 
@@ -890,8 +892,8 @@ def create_reprojection_error_figure(im, data, save_figs=False, single_column=Fa
     rec_errors, rec_mean, rec_std, rec_min, rec_max, rec_corr = reprojection_errors(reproj_rec, rec_points, scale)
     non_errors, non_mean, non_std, non_min, non_max, non_corr = reprojection_errors(reproj_non, triang_non, scale)
 
-    triang_thld = data.config.get('triangulation_threshold', 0.004)
-    bundle_thld = data.config.get('bundle_outlier_threshold', 0.008)
+    triang_thld = data.config['triangulation_threshold']
+    bundle_thld = data.config['bundle_outlier_threshold']
     axis_max = np.max(np.abs(np.vstack((rec_errors, non_errors))))
     axis_max = 1.05 * np.max([axis_max, scale * triang_thld, scale * bundle_thld])
 
@@ -958,24 +960,24 @@ if __name__ == "__main__":
     save = args.save_figs
     single = args.single_col
 
-    print 'Plotting matches for {0} - {1}...'.format(image1, image2)
+    print('Plotting matches for {0} - {1}...'.format(image1, image2))
     create_matches_figure(image1, image2, ds, save, single)
 
-    print 'Plotting tracks for {0} - {1}...'.format(image1, image2)
+    print('Plotting tracks for {0} - {1}...'.format(image1, image2))
     create_tracks_figure(image1, image2, ds, save, single)
 
-    print 'Plotting reconstruction matches for {0} - {1}...'.format(image1, image2)
+    print('Plotting reconstruction matches for {0} - {1}...'.format(image1, image2))
     create_reconstruction_matches_figure(image1, image2, ds, save)
 
     if args.plot_rec:
-        print 'Plotting complete reconstruction tracks for {0}...'.format(image1)
+        print('Plotting complete reconstruction tracks for {0}...'.format(image1))
         create_complete_reconstruction_figure(image1, ds, save, single)
 
-        print 'Plotting reprojection error for {0}...'.format(image1)
+        print('Plotting reprojection error for {0}...'.format(image1))
         create_reprojection_error_figure(image1, ds, save, single)
 
-        print 'Plotting complete reconstruction tracks for {0}...'.format(image2)
+        print('Plotting complete reconstruction tracks for {0}...'.format(image2))
         create_complete_reconstruction_figure(image2, ds, save, single)
 
-        print 'Plotting reprojection error for {0}...'.format(image2)
+        print('Plotting reprojection error for {0}...'.format(image2))
         create_reprojection_error_figure(image2, ds, save, single)

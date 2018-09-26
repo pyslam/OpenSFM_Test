@@ -55,11 +55,44 @@ include_directories(${GLOG_INCLUDE_DIR})
 find_package(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
-find_package(Boost COMPONENTS python REQUIRED)
-include_directories(${Boost_INCLUDE_DIRS})
+find_package(Boost REQUIRED)
 
-set(Python_ADDITIONAL_VERSIONS "2.7")
-find_package(PythonLibs REQUIRED)
+option(BUILD_FOR_PYTHON3 "build pyopengv for Python 3" OFF)
+set(BOOST_PYTHON3_COMPONENT "python3" CACHE STRING
+    "name of the Boost Python 3 component (python3, python-py36 or python-py37)")
+
+if(${BUILD_FOR_PYTHON3})
+    set(BOOST_PYTHON_COMPONENT ${BOOST_PYTHON3_COMPONENT})
+    set(BOOST_NUMPY_COMPONENT numpy3)
+    set(Python_ADDITIONAL_VERSIONS 3.7 3.6)
+    set(Python_VERSION_SUFFIX 3)
+else()
+    if(${Boost_VERSION} LESS 106700)
+        set(BOOST_PYTHON_COMPONENT python)
+        set(BOOST_NUMPY_COMPONENT numpy)
+    else()
+        set(BOOST_PYTHON_COMPONENT python27)
+        set(BOOST_NUMPY_COMPONENT numpy27)
+    endif()
+    set(Python_ADDITIONAL_VERSIONS 2.7)
+    set(Python_VERSION_SUFFIX "")
+endif()
+
+if(${Boost_VERSION} LESS 106300)
+    message("Not using boost/python/numpy.")
+    set(USE_BOOST_PYTHON_NUMPY "off")
+
+    find_package(Boost REQUIRED COMPONENTS ${BOOST_PYTHON_COMPONENT})
+else()
+    message("Using boost/python/numpy.")
+    set(USE_BOOST_PYTHON_NUMPY "on")
+    add_definitions(-DUSE_BOOST_PYTHON_NUMPY)
+
+    find_package(Boost 1.63 REQUIRED COMPONENTS
+                 ${BOOST_PYTHON_COMPONENT} ${BOOST_NUMPY_COMPONENT})
+endif()
+
+find_package(PythonLibs ${Python_VERSION_SUFFIX} REQUIRED)
 include_directories(${PYTHON_INCLUDE_DIRS})
 
 find_package(NumPy REQUIRED)
@@ -86,7 +119,7 @@ target_link_libraries(akaze ${OpenCV_LIBS})
 # VLFeat
 include_directories(third_party/vlfeat)
 file(GLOB VLFEAT_SRCS third_party/vlfeat/vl/*.c third_party/vlfeat/vl/*.h)
-if (NOT CMAKE_SYSTEM_PROCESSOR MATCHES 
+if (NOT CMAKE_SYSTEM_PROCESSOR MATCHES
     "(x86)|(X86)|(x86_64)|(X86_64)|(amd64)|(AMD64)")
     add_definitions(-DVL_DISABLE_SSE2)
 endif ()
@@ -124,6 +157,12 @@ else()
 endif()
 
 
+add_executable(debug_c_extension
+    debug_c_extension.cc
+    third_party/PythonExtensionPatterns/py_import_call_execute.c
+)
+target_link_libraries(debug_c_extension ${PYTHON_LIBRARIES})
+
 # Tests
 option(OPENSFM_BUILD_TESTS "Build OpenSfM unit tests." on)
 
@@ -153,5 +192,5 @@ if (OPENSFM_BUILD_TESTS)
     add_test(${NAME}_test ${NAME}_test)
   endmacro ()
 
-  opensfm_test(depthmap ${OpenCV_LIBS})
+  opensfm_test(depthmap "${OpenCV_LIBS}")
 endif()

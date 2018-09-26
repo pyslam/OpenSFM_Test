@@ -3,11 +3,15 @@
 xcode
 .DS_Store
 launch.json
+.vscode
+.idea
 
 # Ignore generated files
 /build
 /cmake_build
+/doc/build
 .cache
+.pytest_cache
 eval
 
 # Ignore the data folder, but not the berlin example.

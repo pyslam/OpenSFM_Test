@@ -2,6 +2,7 @@ import os
 
 import networkx as nx
 import numpy as np
+from six import iteritems
 
 from opensfm import types
 import opensfm.dataset
@@ -75,9 +76,10 @@ class CubeDataset:
         self.points = {'point' + str(i): p for i, p in enumerate(points)}
 
         g = nx.Graph()
-        for shot_id, shot in self.shots.iteritems():
-            for point_id, point in self.points.iteritems():
+        for shot_id, shot in iteritems(self.shots):
+            for point_id, point in iteritems(self.points):
                 feature = shot.project(point)
+                feature += np.random.rand(*feature.shape)*noise
                 g.add_node(shot_id, bipartite=0)
                 g.add_node(point_id, bipartite=1)
                 g.add_edge(shot_id, point_id, feature=feature,
@@ -89,4 +91,8 @@ def create_berlin_test_folder(tmpdir):
     path = str(tmpdir.mkdir('berlin'))
     os.symlink(os.path.abspath('data/berlin/images'),
                os.path.join(path, 'images'))
+    os.symlink(os.path.abspath('data/berlin/masks'),
+               os.path.join(path, 'masks'))
+    os.symlink(os.path.abspath('data/berlin/gcp_list.txt'),
+               os.path.join(path, 'gcp_list.txt'))
     return opensfm.dataset.DataSet(path)

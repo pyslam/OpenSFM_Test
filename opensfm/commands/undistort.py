@@ -27,11 +27,11 @@ class Command:
         graph = data.load_tracks_graph()
 
         if reconstructions:
-            self.undistort_images(graph, reconstructions[0], data)
+            self.undistort_reconstruction(graph, reconstructions[0], data)
 
         data.save_undistorted_tracks_graph(graph)
 
-    def undistort_images(self, graph, reconstruction, data):
+    def undistort_reconstruction(self, graph, reconstruction, data):
         urec = types.Reconstruction()
         urec.points = reconstruction.points
 
@@ -42,11 +42,24 @@ class Command:
                 urec.add_camera(shot.camera)
                 urec.add_shot(shot)
                 undistorted_shots[shot.id] = [shot]
+            elif shot.camera.projection_type == 'brown':
+                ushot = types.Shot()
+                ushot.id = shot.id
+                ushot.camera = perspective_camera_from_brown(shot.camera)
+                ushot.pose = shot.pose
+                ushot.metadata = shot.metadata
+                urec.add_camera(ushot.camera)
+                urec.add_shot(ushot)
+                undistorted_shots[shot.id] = [ushot]
             elif shot.camera.projection_type == 'fisheye':
-                shot.camera = perspective_camera_from_fisheye(shot.camera)
-                urec.add_camera(shot.camera)
-                urec.add_shot(shot)
-                undistorted_shots[shot.id] = [shot]
+                ushot = types.Shot()
+                ushot.id = shot.id
+                ushot.camera = perspective_camera_from_fisheye(shot.camera)
+                ushot.pose = shot.pose
+                ushot.metadata = shot.metadata
+                urec.add_camera(ushot.camera)
+                urec.add_shot(ushot)
+                undistorted_shots[shot.id] = [ushot]
             elif shot.camera.projection_type in ['equirectangular', 'spherical']:
                 subshot_width = int(data.config['depthmap_resolution'])
                 subshots = perspective_views_of_a_panorama(shot, subshot_width)
@@ -59,7 +72,18 @@ class Command:
 
         arguments = []
         for shot in reconstruction.shots.values():
-            arguments.append((shot, undistorted_shots[shot.id], data))
+            arguments.append((shot, undistorted_shots[shot.id], data,
+                              'load_image',
+                              'save_undistorted_image',
+                              cv2.INTER_AREA))
+            arguments.append((shot, undistorted_shots[shot.id], data,
+                              'load_mask',
+                              'save_undistorted_mask',
+                              cv2.INTER_NEAREST))
+            arguments.append((shot, undistorted_shots[shot.id], data,
+                              'load_segmentation',
+                              'save_undistorted_segmentation',
+                              cv2.INTER_NEAREST))
 
         processes = data.config['processes']
         parallel_map(undistort_image, arguments, processes)
@@ -67,44 +91,86 @@ class Command:
 
 def undistort_image(arguments):
     log.setup()
-
-    shot, undistorted_shots, data = arguments
+    shot, undistorted_shots, data, load_image, save_image, interpolation = arguments
     logger.debug('Undistorting image {}'.format(shot.id))
 
-    if shot.camera.projection_type == 'perspective':
-        image = data.image_as_array(shot.id)
-        undistorted = undistort_perspective_image(image, shot.camera)
-        data.save_undistorted_image(shot.id, undistorted)
-    elif shot.camera.projection_type == 'fisheye':
-        image = data.image_as_array(shot.id)
-        undistorted = undistort_fisheye_image(image, shot.camera)
-        data.save_undistorted_image(shot.id, undistorted)
-    elif shot.camera.projection_type in ['equirectangular', 'spherical']:
-        original = data.image_as_array(shot.id)
+    projection_type = shot.camera.projection_type
+
+    if projection_type in ['perspective', 'brown', 'fisheye']:
+        undistort_function = {
+            'perspective': undistort_perspective_image,
+            'brown': undistort_brown_image,
+            'fisheye': undistort_fisheye_image,
+        }
+        image = getattr(data, load_image)(shot.id)
+        if image is None:
+            return
+        new_camera = undistorted_shots[0].camera
+        uf = undistort_function[projection_type]
+        undistorted = uf(image, shot.camera, new_camera, interpolation)
+        getattr(data, save_image)(shot.id, undistorted)
+    elif projection_type in ['equirectangular', 'spherical']:
+        original = getattr(data, load_image)(shot.id)
+        if original is None:
+            return
         subshot_width = int(data.config['depthmap_resolution'])
         width = 4 * subshot_width
-        height = width / 2
-        image = cv2.resize(original, (width, height), interpolation=cv2.INTER_AREA)
+        height = width // 2
+        image = cv2.resize(original, (width, height), interpolation=interpolation)
         for subshot in undistorted_shots:
             undistorted = render_perspective_view_of_a_panorama(
-                image, shot, subshot)
-            data.save_undistorted_image(subshot.id, undistorted)
+                image, shot, subshot,
+                cv2.INTER_LINEAR if interpolation == cv2.INTER_AREA else interpolation)
+            getattr(data, save_image)(subshot.id, undistorted)
+    else:
+        raise NotImplementedError(
+            'Undistort not implemented for projection type: {}'.format(
+                shot.camera.projection_type))
 
 
-def undistort_perspective_image(image, camera):
+def undistort_perspective_image(image, camera, new_camera, interpolation):
     """Remove radial distortion from a perspective image."""
     height, width = image.shape[:2]
     K = camera.get_K_in_pixel_coordinates(width, height)
     distortion = np.array([camera.k1, camera.k2, 0, 0])
-    return cv2.undistort(image, K, distortion)
+    new_K = new_camera.get_K_in_pixel_coordinates(width, height)
+    map1, map2 = cv2.initUndistortRectifyMap(
+        K, distortion, None, new_K, (width, height), cv2.CV_32FC1)
+    return cv2.remap(image, map1, map2, interpolation)
 
 
-def undistort_fisheye_image(image, camera):
-    """Remove radial distortion from a perspective image."""
+def undistort_brown_image(image, camera, new_camera, interpolation):
+    """Remove radial distortion from a brown image."""
+    height, width = image.shape[:2]
+    K = camera.get_K_in_pixel_coordinates(width, height)
+    distortion = np.array([camera.k1, camera.k2, camera.p1, camera.p2, camera.k3])
+    new_K = new_camera.get_K_in_pixel_coordinates(width, height)
+    map1, map2 = cv2.initUndistortRectifyMap(
+        K, distortion, None, new_K, (width, height), cv2.CV_32FC1)
+    return cv2.remap(image, map1, map2, interpolation)
+
+
+def undistort_fisheye_image(image, camera, new_camera, interpolation):
+    """Remove radial distortion from a fisheye image."""
     height, width = image.shape[:2]
     K = camera.get_K_in_pixel_coordinates(width, height)
     distortion = np.array([camera.k1, camera.k2, 0, 0])
-    return cv2.fisheye.undistortImage(image, K, distortion, K)
+    new_K = new_camera.get_K_in_pixel_coordinates(width, height)
+    map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+        K, distortion, None, new_K, (width, height), cv2.CV_32FC1)
+    return cv2.remap(image, map1, map2, interpolation)
+
+
+def perspective_camera_from_brown(brown):
+    """Create a perspective camera froma a Brown camera."""
+    camera = types.PerspectiveCamera()
+    camera.id = brown.id
+    camera.width = brown.width
+    camera.height = brown.height
+    camera.focal = (brown.focal_x + brown.focal_y) / 2.0
+    camera.focal_prior = (brown.focal_x_prior + brown.focal_y_prior) / 2.0
+    camera.k1 = camera.k1_prior = camera.k2 = camera.k2_prior = 0.0
+    return camera
 
 
 def perspective_camera_from_fisheye(fisheye):
@@ -152,7 +218,8 @@ def perspective_views_of_a_panorama(spherical_shot, width):
     return shots
 
 
-def render_perspective_view_of_a_panorama(image, panoshot, perspectiveshot):
+def render_perspective_view_of_a_panorama(image, panoshot, perspectiveshot,
+                                          interpolation=cv2.INTER_LINEAR):
     """Render a perspective view of a panorama."""
     # Get destination pixel coordinates
     dst_shape = (perspectiveshot.camera.height, perspectiveshot.camera.width)
@@ -165,7 +232,7 @@ def render_perspective_view_of_a_panorama(image, panoshot, perspectiveshot):
         perspectiveshot.camera.height)
 
     # Convert to bearing
-    dst_bearings = perspectiveshot.camera.pixel_bearings(dst_pixels)
+    dst_bearings = perspectiveshot.camera.pixel_bearing_many(dst_pixels)
 
     # Rotate to panorama reference frame
     rotation = np.dot(panoshot.pose.get_rotation_matrix(),
@@ -181,12 +248,13 @@ def render_perspective_view_of_a_panorama(image, panoshot, perspectiveshot):
     src_pixels_denormalized = features.denormalized_image_coordinates(
         src_pixels, image.shape[1], image.shape[0])
 
+    src_pixels_denormalized.shape = dst_shape + (2,)
+
     # Sample color
-    colors = cv2.remap(image,
-                       src_pixels_denormalized[:, 0].astype(np.float32),
-                       src_pixels_denormalized[:, 1].astype(np.float32),
-                       cv2.INTER_LINEAR)
-    colors.shape = dst_shape + (-1,)
+    x = src_pixels_denormalized[..., 0].astype(np.float32)
+    y = src_pixels_denormalized[..., 1].astype(np.float32)
+    colors = cv2.remap(image, x, y, interpolation, borderMode=cv2.BORDER_WRAP)
+
     return colors
 
 

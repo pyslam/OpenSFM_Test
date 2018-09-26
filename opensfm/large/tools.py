@@ -7,12 +7,15 @@ import scipy.spatial as spatial
 
 from collections import namedtuple
 from networkx.algorithms import bipartite
+from repoze.lru import lru_cache
 
 from opensfm import align
 from opensfm import context
 from opensfm import csfm
 from opensfm import dataset
 from opensfm import geo
+from opensfm import reconstruction
+from opensfm import multiview
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +39,8 @@ def add_cluster_neighbors(positions, labels, centers, max_distance):
     topocentrics = []
     for position in positions:
         x, y, z = geo.topocentric_from_lla(
-            position[0],
-            position[1],
-            0,
-            reference[0],
-            reference[1],
-            0)
-
+            position[0], position[1], 0,
+            reference[0], reference[1], 0)
         topocentrics.append([x, y])
 
     topocentrics = np.array(topocentrics)
@@ -50,7 +48,7 @@ def add_cluster_neighbors(positions, labels, centers, max_distance):
 
     clusters = []
     for label in np.arange(centers.shape[0]):
-        cluster_indices = np.where(labels.ravel() == label)[0]
+        cluster_indices = np.where(labels == label)[0]
 
         neighbors = []
         for i in cluster_indices:
@@ -74,17 +72,6 @@ def connected_reconstructions(reconstruction_shots):
     p = bipartite.projected_graph(g, reconstruction_shots.keys())
 
     return p.edges()
-
-
-def corresponding_tracks(tracks1, tracks2):
-    features1 = {tracks1[t1]["feature_id"]: t1 for t1 in tracks1}
-    corresponding_tracks = []
-    for t2 in tracks2:
-        feature_id = tracks2[t2]["feature_id"]
-        if feature_id in features1:
-            corresponding_tracks.append((features1[feature_id], t2))
-
-    return corresponding_tracks
 
 
 def scale_matrix(covariance):
@@ -113,7 +100,7 @@ def encode_reconstruction_name(key):
     return str(key.submodel_path) + "_index" + str(key.index)
 
 
-def add_camera_constraints(ra, reconstruction_shots):
+def add_camera_constraints_soft(ra, reconstruction_shots):
     added_shots = set()
     for key in reconstruction_shots:
         shots = reconstruction_shots[key]
@@ -127,19 +114,21 @@ def add_camera_constraints(ra, reconstruction_shots):
             t = shot.pose.translation
 
             if shot_id not in added_shots:
-                ra.add_shot(shot_name, R[0], R[1], R[2], t[0], t[1], t[2], False)
+                ra.add_shot(shot_name, R[0], R[1], R[2],
+                            t[0], t[1], t[2], False)
 
                 gps = shot.metadata.gps_position
                 gps_sd = shot.metadata.gps_dop
+
                 ra.add_absolute_position_constraint(
-                    shot_name, gps[0], gps[1], gps[2], gps_sd)
+                        shot_name, gps[0], gps[1], gps[2], gps_sd)
 
                 added_shots.add(shot_id)
 
             covariance = np.diag([1e-5, 1e-5, 1e-5, 1e-2, 1e-2, 1e-2])
             sm = scale_matrix(covariance)
             rmc = csfm.RARelativeMotionConstraint(
-                rec_name, shot_name, R[0], R[1], R[2], t[0], t[1], t[2])
+                   rec_name, shot_name, R[0], R[1], R[2], t[0], t[1], t[2])
 
             for i in range(6):
                 for j in range(6):
@@ -148,30 +137,76 @@ def add_camera_constraints(ra, reconstruction_shots):
             ra.add_relative_motion_constraint(rmc)
 
 
+def add_camera_constraints_hard(ra, reconstruction_shots,
+                                add_common_camera_constraint):
+    for key in reconstruction_shots:
+        shots = reconstruction_shots[key]
+        rec_name = encode_reconstruction_name(key)
+        ra.add_reconstruction(rec_name, 0, 0, 0, 0, 0, 0, 1, False)
+        for shot_id in shots:
+            shot = shots[shot_id]
+            shot_name = rec_name + str(shot_id)
+
+            R = shot.pose.rotation
+            t = shot.pose.translation
+            ra.add_shot(shot_name, R[0], R[1], R[2],
+                        t[0], t[1], t[2], True)
+
+            gps = shot.metadata.gps_position
+            gps_sd = shot.metadata.gps_dop
+            ra.add_relative_absolute_position_constraint(
+                rec_name, shot_name, gps[0], gps[1], gps[2], gps_sd)
+
+    if add_common_camera_constraint:
+        connections = connected_reconstructions(reconstruction_shots)
+        for connection in connections:
+            rec_name1 = encode_reconstruction_name(connection[0])
+            rec_name2 = encode_reconstruction_name(connection[1])
+
+            shots1 = reconstruction_shots[connection[0]]
+            shots2 = reconstruction_shots[connection[1]]
+
+            common_images = set(shots1.keys()).intersection(shots2.keys())
+            for image in common_images:
+                ra.add_common_camera_constraint(rec_name1, rec_name1 +
+                                                str(image),
+                                                rec_name2, rec_name2 +
+                                                str(image),
+                                                1, 0.1)
+@lru_cache(25)
+def load_reconstruction(path, index):
+    d1 = dataset.DataSet(path)
+    r1 = d1.load_reconstruction()[index]
+    g1 = d1.load_tracks_graph()
+    return (path + ("_%s" % index)), (r1, g1)
+
+
 def add_point_constraints(ra, reconstruction_shots):
     connections = connected_reconstructions(reconstruction_shots)
     for connection in connections:
-        d1 = dataset.DataSet(connection[0].submodel_path)
-        d2 = dataset.DataSet(connection[1].submodel_path)
 
-        r1 = d1.load_reconstruction()[connection[0].index]
-        r2 = d2.load_reconstruction()[connection[1].index]
-
-        common_ims = set(r1.shots.keys()).intersection(r2.shots.keys())
-
-        g1 = d1.load_tracks_graph()
-        g2 = d2.load_tracks_graph()
+        i1, (r1, g1) = load_reconstruction(
+            connection[0].submodel_path, connection[0].index)
+        i2, (r2, g2) = load_reconstruction(
+            connection[1].submodel_path, connection[1].index)
 
         rec_name1 = encode_reconstruction_name(connection[0])
         rec_name2 = encode_reconstruction_name(connection[1])
 
-        common_tracks = set()
-        for im in common_ims:
-            for t1, t2 in corresponding_tracks(g1[im], g2[im]):
-                if t1 in r1.points and t2 in r2.points:
-                    common_tracks.add((t1, t2))
+        scale_treshold = 1.3
+        treshold_in_meter = 0.3
+        minimum_inliers = 20
+        status, T, inliers = reconstruction.resect_reconstruction(
+            r1, r2, g1, g2, treshold_in_meter, minimum_inliers)
+        if not status:
+            continue
 
-        for t1, t2 in common_tracks:
+        s, R, t = multiview.decompose_similarity_transform(T)
+        if s > scale_treshold or s < (1.0/scale_treshold) or \
+                len(inliers) < minimum_inliers:
+            continue
+
+        for t1, t2 in inliers:
             c1 = r1.points[t1].coordinates
             c2 = r2.points[t2].coordinates
 
@@ -196,11 +231,16 @@ def load_reconstruction_shots(meta_data):
     return reconstruction_shots
 
 
-def align_reconstructions(reconstruction_shots):
+def align_reconstructions(reconstruction_shots, use_points_constraints,
+                          camera_constraint_type='soft_camera_constraint'):
     ra = csfm.ReconstructionAlignment()
 
-    add_camera_constraints(ra, reconstruction_shots)
-    add_point_constraints(ra, reconstruction_shots)
+    if camera_constraint_type is 'soft_camera_constraint':
+        add_camera_constraints_soft(ra, reconstruction_shots)
+    if camera_constraint_type is 'hard_camera_constraint':
+        add_camera_constraints_hard(ra, reconstruction_shots, True)
+    if use_points_constraints:
+        add_point_constraints(ra, reconstruction_shots)
 
     ra.run()
 

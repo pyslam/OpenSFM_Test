@@ -16,7 +16,7 @@ def triangle_mesh(shot_id, r, graph, data):
 
     shot = r.shots[shot_id]
 
-    if shot.camera.projection_type == 'perspective':
+    if shot.camera.projection_type in ['perspective', 'brown']:
         return triangle_mesh_perspective(shot_id, r, graph)
     elif shot.camera.projection_type == 'fisheye':
         return triangle_mesh_fisheye(shot_id, r, graph)
@@ -38,7 +38,8 @@ def triangle_mesh_perspective(shot_id, r, graph):
         if track_id in r.points:
             point = r.points[track_id]
             pixel = shot.project(point.coordinates)
-            if -dx <= pixel[0] <= dx and -dy <= pixel[1] <= dy:
+            nonans = not np.isnan(pixel).any()
+            if nonans and -dx <= pixel[0] <= dx and -dy <= pixel[1] <= dy:
                 vertices.append(point.coordinates)
                 pixels.append(pixel.tolist())
 
@@ -73,7 +74,9 @@ def back_project_no_distortion(shot, pixel, depth):
     '''
     Back-project a pixel of a perspective camera ignoring its radial distortion
     '''
-    p = np.array([pixel[0], pixel[1], shot.camera.focal])
+    K = shot.camera.get_K()
+    K1 = np.linalg.inv(K)
+    p = np.dot(K1, [pixel[0], pixel[1], 1])
     p *= depth / p[2]
     return shot.pose.transform_inverse(p)
 
@@ -105,10 +108,11 @@ def triangle_mesh_fisheye(shot_id, r, graph):
     for track_id, edge in graph[shot_id].items():
         if track_id in r.points:
             point = r.points[track_id].coordinates
-            vertices.append(point)
             direction = shot.pose.transform(point)
             pixel = direction / np.linalg.norm(direction)
-            bearings.append(pixel.tolist())
+            if not np.isnan(pixel).any():
+                vertices.append(point)
+                bearings.append(pixel.tolist())
 
     # Triangulate
     tri = scipy.spatial.ConvexHull(bearings)
@@ -142,10 +146,11 @@ def triangle_mesh_equirectangular(shot_id, r, graph):
     for track_id, edge in graph[shot_id].items():
         if track_id in r.points:
             point = r.points[track_id].coordinates
-            vertices.append(point)
             direction = shot.pose.transform(point)
             pixel = direction / np.linalg.norm(direction)
-            bearings.append(pixel.tolist())
+            if not np.isnan(pixel).any():
+                vertices.append(point)
+                bearings.append(pixel.tolist())
 
     tri = scipy.spatial.ConvexHull(bearings)
     faces = tri.simplices.tolist()

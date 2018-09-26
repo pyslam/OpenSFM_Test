@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from collections import defaultdict
 
 from opensfm import dataset
 from opensfm.large import metadataset
@@ -14,15 +15,6 @@ class Command:
 
     def add_arguments(self, parser):
         parser.add_argument('dataset', help='dataset to process')
-        parser.add_argument('-s', '--size', type=int, default=50,
-                            help='the average cluster size')
-        parser.add_argument('-d', '--dist', type=int, default=30,
-                            help='the max distance in meters to a neighbor ' \
-                            'for it to be included in the cluster')
-        parser.add_argument('-n', '--no-symlinks',
-                            action='store_true',
-                            help='Do not create any symlinks, ' \
-                            'every submodels needs to run complete pipeline')
 
     def run(self, args):
         data = dataset.DataSet(args.dataset)
@@ -30,22 +22,29 @@ class Command:
 
         meta_data.remove_submodels()
         data.invent_reference_lla()
-
         self._create_image_list(data, meta_data)
-        self._cluster_images(meta_data, args.size)
-        self._add_cluster_neighbors(meta_data, args.dist)
+
+        if meta_data.image_groups_exists():
+            self._read_image_groups(meta_data)
+        else:
+            self._cluster_images(meta_data, data.config['submodel_size'])
+
+        self._add_cluster_neighbors(meta_data, data.config['submodel_overlap'])
+        self._save_clusters_geojson(meta_data)
+        self._save_cluster_neighbors_geojson(meta_data)
 
         meta_data.create_submodels(
-            meta_data.load_clusters_with_neighbors(), args.no_symlinks)
+            meta_data.load_clusters_with_neighbors())
 
     def _create_image_list(self, data, meta_data):
         ills = []
         for image in data.images():
             exif = data.load_exif(image)
-            if 'gps' not in exif or \
-                'latitude' not in exif['gps'] or \
-                'longitude' not in exif['gps']:
-                logger.warning('Skipping {} because of missing GPS'.format(image))
+            if ('gps' not in exif or
+                    'latitude' not in exif['gps'] or
+                    'longitude' not in exif['gps']):
+                logger.warning(
+                    'Skipping {} because of missing GPS'.format(image))
                 continue
 
             lat = exif['gps']['latitude']
@@ -53,6 +52,37 @@ class Command:
             ills.append((image, lat, lon))
 
         meta_data.create_image_list(ills)
+
+    def _read_image_groups(self, meta_data):
+        image_cluster = {}
+        cluster_images = defaultdict(list)
+        for image, cluster in meta_data.load_image_groups():
+            image_cluster[image] = cluster
+            cluster_images[cluster].append(image)
+        K = len(cluster_images)
+        cluster_index = dict(zip(sorted(cluster_images.keys()), range(K)))
+
+        images = []
+        positions = []
+        labels = []
+        centers = np.zeros((K, 2))
+        centers_count = np.zeros((K, 1))
+        for image, lat, lon in meta_data.images_with_gps():
+            images.append(image)
+            positions.append([lat, lon])
+            cluster = image_cluster[image]
+            label = cluster_index[cluster]
+            labels.append(label)
+            centers[label, 0] += lat
+            centers[label, 1] += lon
+            centers_count[label] += 1
+
+        images = np.array(images)
+        positions = np.array(positions, np.float32)
+        labels = np.array(labels)
+        centers /= centers_count
+
+        meta_data.save_clusters(images, positions, labels, centers)
 
     def _cluster_images(self, meta_data, cluster_size):
         images = []
@@ -69,6 +99,9 @@ class Command:
 
         labels, centers = tools.kmeans(positions, K)[1:]
 
+        images = images.ravel()
+        labels = labels.ravel()
+
         meta_data.save_clusters(images, positions, labels, centers)
 
     def _add_cluster_neighbors(self, meta_data, max_distance):
@@ -81,3 +114,55 @@ class Command:
             image_clusters.append(list(np.take(images, np.array(cluster))))
 
         meta_data.save_clusters_with_neighbors(image_clusters)
+
+    def _save_cluster_neighbors_geojson(self, meta_data):
+        image_coordinates = {}
+        for image, lat, lon in meta_data.images_with_gps():
+            image_coordinates[image] = [lon, lat]
+
+        features = []
+        clusters = meta_data.load_clusters_with_neighbors()
+        for cluster_idx, images in enumerate(clusters):
+            for image in images:
+                features.append({
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": image_coordinates[image]
+                    },
+                    "properties": {
+                        "name": image,
+                        "submodel": cluster_idx
+                    }
+                })
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        meta_data.save_cluster_with_neighbors_geojson(geojson)
+
+    def _save_clusters_geojson(self, meta_data):
+        image_coordinates = {}
+        for image, lat, lon in meta_data.images_with_gps():
+            image_coordinates[image] = [lon, lat]
+
+        features = []
+        images, positions, labels, centers = meta_data.load_clusters()
+        for image, label in zip(images, labels):
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": image_coordinates[image]
+                },
+                "properties": {
+                    "name": image,
+                    "submodel": int(label)  # cluster_idx
+                }
+            })
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+        meta_data.save_clusters_geojson(geojson)
+
